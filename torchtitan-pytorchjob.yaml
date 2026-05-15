@@ -1,6 +1,5 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
-
 metadata:
   name: torchtitan-llama-c4
 
@@ -8,21 +7,13 @@ spec:
   runPolicy:
     cleanPodPolicy: Running
 
-  elasticPolicy:
-    rdzvBackend: c10d
-    minReplicas: 4
-    maxReplicas: 4
-    nProcPerNode: 8
-
   pytorchReplicaSpecs:
 
     Master:
       replicas: 1
-
       restartPolicy: Never
 
       template:
-
         metadata:
           annotations:
             k8s.v1.cni.cncf.io/networks: >-
@@ -44,70 +35,60 @@ spec:
               roce-net-fabric15@fabric15
 
         spec:
-
           restartPolicy: Never
 
-          # IMPORTANT
-          # Adjust if your cluster uses different taints
+          imagePullSecrets:
+            - name: ghcr-secret
+
           tolerations:
             - key: "nvidia.com/gpu"
               operator: "Exists"
               effect: "NoSchedule"
 
-          imagePullSecrets:
-            - name: ghcr-secret
-
           containers:
-
             - name: pytorch
-
               image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
-
               imagePullPolicy: Always
+
+              env:
+                - name: NCCL_DEBUG
+                  value: "INFO"
+                - name: NCCL_SOCKET_IFNAME
+                  value: "eth0"
+                - name: NCCL_IB_DISABLE
+                  value: "0"
+                - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+                  value: "1"
+                - name: NCCL_CROSS_NIC
+                  value: "1"
 
               command:
                 - /bin/bash
                 - -c
                 - |
-                  set -ex
+                  set -eux
 
-                  export MASTER_ADDR=torchtitan-llama-c4-master-0
-                  export MASTER_PORT=29500
+                  export MASTER_ADDR=${PET_MASTER_ADDR}
+                  export MASTER_PORT=${PET_MASTER_PORT:-29500}
 
-                  export WORLD_SIZE=4
-                  export RANK=0
-
-                  export NCCL_DEBUG=INFO
-                  export NCCL_IB_DISABLE=0
-                  export NCCL_SOCKET_IFNAME=eth0
-
-                  export NCCL_IB_HCA=fabric0,fabric1,fabric2,fabric3,\
-                  fabric4,fabric5,fabric6,fabric7,\
-                  fabric8,fabric9,fabric10,fabric11,\
-                  fabric12,fabric13,fabric14,fabric15
-
-                  export NCCL_CROSS_NIC=1
-                  export NCCL_IB_QPS_PER_CONNECTION=4
-                  export NCCL_NET_GDR_LEVEL=2
-
-                  export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+                  export NODE_RANK=${PET_NODE_RANK}
+                  export NNODES=${PET_NNODES}
+                  export WORLD_SIZE=$((NNODES * 8))
 
                   cd /workspace/torchtitan
 
                   torchrun \
-                    --nnodes=4 \
+                    --nnodes=${NNODES} \
                     --nproc_per_node=8 \
-                    --node_rank=0 \
-                    --master_addr=$MASTER_ADDR \
-                    --master_port=$MASTER_PORT \
-                    train.py \
+                    --node_rank=${NODE_RANK} \
+                    --master_addr=${MASTER_ADDR} \
+                    --master_port=${MASTER_PORT} \
+                    -m torchtitan.train \
                     --job.config_file ./configs/llama3_8b_32gpu.toml
 
               resources:
-
                 limits:
                   nvidia.com/gpu: 8
-
                   rdma/fabric0: 1
                   rdma/fabric1: 1
                   rdma/fabric2: 1
@@ -127,7 +108,6 @@ spec:
 
                 requests:
                   nvidia.com/gpu: 8
-
                   rdma/fabric0: 1
                   rdma/fabric1: 1
                   rdma/fabric2: 1
@@ -148,10 +128,6 @@ spec:
               volumeMounts:
                 - name: dshm
                   mountPath: /dev/shm
-
-              env:
-                - name: PYTHONUNBUFFERED
-                  value: "1"
 
           volumes:
             - name: dshm
@@ -159,13 +135,12 @@ spec:
                 medium: Memory
                 sizeLimit: 32Gi
 
+
     Worker:
       replicas: 3
-
       restartPolicy: Never
 
       template:
-
         metadata:
           annotations:
             k8s.v1.cni.cncf.io/networks: >-
@@ -187,80 +162,60 @@ spec:
               roce-net-fabric15@fabric15
 
         spec:
-
           restartPolicy: Never
+
+          imagePullSecrets:
+            - name: ghcr-secret
 
           tolerations:
             - key: "nvidia.com/gpu"
               operator: "Exists"
               effect: "NoSchedule"
 
-          imagePullSecrets:
-            - name: ghcr-secret
-
           containers:
-
             - name: pytorch
-
               image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
-
               imagePullPolicy: Always
+
+              env:
+                - name: NCCL_DEBUG
+                  value: "INFO"
+                - name: NCCL_SOCKET_IFNAME
+                  value: "eth0"
+                - name: NCCL_IB_DISABLE
+                  value: "0"
+                - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+                  value: "1"
+                - name: NCCL_CROSS_NIC
+                  value: "1"
 
               command:
                 - /bin/bash
                 - -c
                 - |
-                  set -ex
+                  set -eux
 
-                  export MASTER_ADDR=torchtitan-llama-c4-master-0
-                  export MASTER_PORT=29500
+                  export MASTER_ADDR=${PET_MASTER_ADDR}
+                  export MASTER_PORT=${PET_MASTER_PORT:-29500}
 
-                  export WORLD_SIZE=4
-
-                  HOSTNAME=$(hostname)
-
-                  if [[ $HOSTNAME =~ worker-0 ]]; then
-                    export RANK=1
-                    export NODE_RANK=1
-                  elif [[ $HOSTNAME =~ worker-1 ]]; then
-                    export RANK=2
-                    export NODE_RANK=2
-                  else
-                    export RANK=3
-                    export NODE_RANK=3
-                  fi
-
-                  export NCCL_DEBUG=INFO
-                  export NCCL_IB_DISABLE=0
-                  export NCCL_SOCKET_IFNAME=eth0
-
-                  export NCCL_IB_HCA=fabric0,fabric1,fabric2,fabric3,\
-                  fabric4,fabric5,fabric6,fabric7,\
-                  fabric8,fabric9,fabric10,fabric11,\
-                  fabric12,fabric13,fabric14,fabric15
-
-                  export NCCL_CROSS_NIC=1
-                  export NCCL_IB_QPS_PER_CONNECTION=4
-                  export NCCL_NET_GDR_LEVEL=2
-
-                  export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+                  export NODE_RANK=${PET_NODE_RANK}
+                  export NNODES=${PET_NNODES}
+                  export WORLD_SIZE=$((NNODES * 8))
 
                   cd /workspace/torchtitan
 
                   torchrun \
-                    --nnodes=4 \
+                    --nnodes=${NNODES} \
                     --nproc_per_node=8 \
-                    --node_rank=$NODE_RANK \
-                    --master_addr=$MASTER_ADDR \
-                    --master_port=$MASTER_PORT \
-                    train.py \
+                    --node_rank=${NODE_RANK} \
+                    --master_addr=${MASTER_ADDR} \
+                    --master_port=${MASTER_PORT} \
+                    -m torchtitan.train \
                     --job.config_file ./configs/llama3_8b_32gpu.toml
 
               resources:
-
                 limits:
                   nvidia.com/gpu: 8
-
                   rdma/fabric0: 1
                   rdma/fabric1: 1
                   rdma/fabric2: 1
@@ -280,7 +235,6 @@ spec:
 
                 requests:
                   nvidia.com/gpu: 8
-
                   rdma/fabric0: 1
                   rdma/fabric1: 1
                   rdma/fabric2: 1
@@ -301,10 +255,6 @@ spec:
               volumeMounts:
                 - name: dshm
                   mountPath: /dev/shm
-
-              env:
-                - name: PYTHONUNBUFFERED
-                  value: "1"
 
           volumes:
             - name: dshm

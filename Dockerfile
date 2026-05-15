@@ -1,44 +1,59 @@
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
-ENV DEBIAN_FRONTEND=noninteractive
-
+# -------------------------
+# System dependencies
+# -------------------------
 RUN apt-get update && apt-get install -y \
     git \
     wget \
-    vim \
-    openssh-server \
-    libibverbs-dev \
-    rdma-core \
-    infiniband-diags \
-    ibverbs-utils \
-    iproute2 \
-    net-tools \
+    curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install TorchTitan
-WORKDIR /workspace
+# -------------------------
+# Upgrade pip tooling
+# -------------------------
+RUN pip install --upgrade pip setuptools wheel
 
-RUN git clone https://github.com/pytorch/torchtitan.git
+# -------------------------
+# Install PyTorch nightly (IMPORTANT FIX)
+# This is what provides missing distributed checkpoint APIs
+# -------------------------
+RUN pip install --pre torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu121
+
+# -------------------------
+# Install distributed + checkpoint dependencies
+# -------------------------
+RUN pip install \
+    numpy \
+    packaging \
+    typing_extensions \
+    pyyaml \
+    protobuf \
+    sentencepiece \
+    accelerate
+
+# -------------------------
+# Install TorchTitan (your training framework)
+# -------------------------
+RUN git clone https://github.com/pytorch/torchtitan.git /workspace/torchtitan
 
 WORKDIR /workspace/torchtitan
 
-RUN pip install --upgrade pip
+# Install TorchTitan dependencies
+RUN pip install -r requirements.txt || true
 
-RUN pip install -r requirements.txt
+# Install package in editable mode
+RUN pip install -e .
 
-RUN pip install \
-    datasets \
-    transformers \
-    sentencepiece \
-    tiktoken \
-    wandb \
-    tensorboard
+# -------------------------
+# Verify critical import exists at build time
+# (fails fast if mismatch happens)
+# -------------------------
+RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('Checkpoint API OK')"
 
-ENV CUDA_DEVICE_MAX_CONNECTIONS=1
-ENV NCCL_DEBUG=WARN
-ENV NCCL_IB_DISABLE=0
-ENV NCCL_NET_GDR_LEVEL=2
-ENV NCCL_SOCKET_IFNAME=eth0
-ENV TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-
-CMD ["/bin/bash"]
+# -------------------------
+# Default workdir
+# -------------------------
+WORKDIR /workspace
