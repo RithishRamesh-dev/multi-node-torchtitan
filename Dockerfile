@@ -11,16 +11,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # -------------------------
-# Upgrade pip tooling
+# Upgrade pip tooling (but NOT torch itself)
 # -------------------------
 RUN pip install --upgrade pip setuptools wheel
-
-# -------------------------
-# Install PyTorch nightly (IMPORTANT FIX)
-# This is what provides missing distributed checkpoint APIs
-# -------------------------
-RUN pip install --pre torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu121
 
 # -------------------------
 # Install distributed + checkpoint dependencies
@@ -35,25 +28,22 @@ RUN pip install \
     accelerate
 
 # -------------------------
-# Install TorchTitan (your training framework)
+# Install TorchTitan
 # -------------------------
 RUN git clone https://github.com/pytorch/torchtitan.git /workspace/torchtitan
 
 WORKDIR /workspace/torchtitan
 
-# Install TorchTitan dependencies
-RUN pip install -r requirements.txt || true
+# Install TorchTitan dependencies (without upgrading torch)
+RUN pip install -r requirements.txt --no-deps || true
 
 # Install package in editable mode
-RUN pip install -e .
+RUN pip install -e . --no-deps
 
 # -------------------------
-# Verify critical import exists at build time
-# (fails fast if mismatch happens)
+# Verify critical import
 # -------------------------
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('Checkpoint API OK')"
+RUN python -c "import torch; print('PyTorch version:', torch.__version__)"
 
-# -------------------------
-# Default workdir
-# -------------------------
 WORKDIR /workspace

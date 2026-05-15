@@ -45,8 +45,41 @@ spec:
               operator: "Exists"
               effect: "NoSchedule"
 
+          initContainers:
+            # FIX: Download tokenizer before training starts.
+            # TorchTitan requires tokenizer.model at the path specified in the toml.
+            - name: init-pytorch
+              image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
+              imagePullPolicy: Always
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -eux
+                  cd /workspace/torchtitan
+                  # Download tokenizer if not present
+                  if [ ! -f tokenizer.model ]; then
+                    python scripts/download_tokenizer.py \
+                      --repo_id meta-llama/Meta-Llama-3-8B \
+                      --tokenizer_path . \
+                      --hf_token "${HF_TOKEN:-}"
+                  fi
+              env:
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-secret
+                      key: token
+                      optional: true
+              volumeMounts:
+                - name: dshm
+                  mountPath: /dev/shm
+
           containers:
             - name: pytorch
+              # FIX: Pin image digest or use a versioned tag instead of :latest
+              # to ensure all pods run the same rebuilt image.
+              # e.g. ghcr.io/rithishramesh-dev/torchtitan-llama:v1.0.0
               image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
               imagePullPolicy: Always
 
@@ -57,9 +90,17 @@ spec:
                   value: "eth0"
                 - name: NCCL_IB_DISABLE
                   value: "0"
+                - name: NCCL_IB_HCA
+                  value: "fabric0,fabric1,fabric2,fabric3,fabric4,fabric5,fabric6,fabric7,fabric8,fabric9,fabric10,fabric11,fabric12,fabric13,fabric14,fabric15"
+                - name: NCCL_IB_QPS_PER_CONNECTION
+                  value: "4"
+                - name: NCCL_NET_GDR_LEVEL
+                  value: "2"
+                - name: NCCL_CROSS_NIC
+                  value: "1"
                 - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
                   value: "1"
-                - name: NCCL_CROSS_NIC
+                - name: CUDA_DEVICE_MAX_CONNECTIONS
                   value: "1"
 
               command:
@@ -68,15 +109,16 @@ spec:
                 - |
                   set -eux
 
+                  # PET_* variables are injected by the PyTorch operator
                   export MASTER_ADDR=${PET_MASTER_ADDR}
                   export MASTER_PORT=${PET_MASTER_PORT:-29500}
-
                   export NODE_RANK=${PET_NODE_RANK}
                   export NNODES=${PET_NNODES}
-                  export WORLD_SIZE=$((NNODES * 8))
 
                   cd /workspace/torchtitan
 
+                  # FIX: Use -m torchtitan.train (not train.py directly)
+                  # FIX: Config filename matches what is actually in the container
                   torchrun \
                     --nnodes=${NNODES} \
                     --nproc_per_node=8 \
@@ -84,7 +126,7 @@ spec:
                     --master_addr=${MASTER_ADDR} \
                     --master_port=${MASTER_PORT} \
                     -m torchtitan.train \
-                    --job.config_file ./configs/llama3_8b_32gpu.toml
+                    --job.config_file ./configs/llama3_8b.toml
 
               resources:
                 limits:
@@ -105,7 +147,6 @@ spec:
                   rdma/fabric13: 1
                   rdma/fabric14: 1
                   rdma/fabric15: 1
-
                 requests:
                   nvidia.com/gpu: 8
                   rdma/fabric0: 1
@@ -184,9 +225,17 @@ spec:
                   value: "eth0"
                 - name: NCCL_IB_DISABLE
                   value: "0"
+                - name: NCCL_IB_HCA
+                  value: "fabric0,fabric1,fabric2,fabric3,fabric4,fabric5,fabric6,fabric7,fabric8,fabric9,fabric10,fabric11,fabric12,fabric13,fabric14,fabric15"
+                - name: NCCL_IB_QPS_PER_CONNECTION
+                  value: "4"
+                - name: NCCL_NET_GDR_LEVEL
+                  value: "2"
+                - name: NCCL_CROSS_NIC
+                  value: "1"
                 - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
                   value: "1"
-                - name: NCCL_CROSS_NIC
+                - name: CUDA_DEVICE_MAX_CONNECTIONS
                   value: "1"
 
               command:
@@ -197,10 +246,8 @@ spec:
 
                   export MASTER_ADDR=${PET_MASTER_ADDR}
                   export MASTER_PORT=${PET_MASTER_PORT:-29500}
-
                   export NODE_RANK=${PET_NODE_RANK}
                   export NNODES=${PET_NNODES}
-                  export WORLD_SIZE=$((NNODES * 8))
 
                   cd /workspace/torchtitan
 
@@ -211,7 +258,7 @@ spec:
                     --master_addr=${MASTER_ADDR} \
                     --master_port=${MASTER_PORT} \
                     -m torchtitan.train \
-                    --job.config_file ./configs/llama3_8b_32gpu.toml
+                    --job.config_file ./configs/llama3_8b.toml
 
               resources:
                 limits:
@@ -232,7 +279,6 @@ spec:
                   rdma/fabric13: 1
                   rdma/fabric14: 1
                   rdma/fabric15: 1
-
                 requests:
                   nvidia.com/gpu: 8
                   rdma/fabric0: 1
