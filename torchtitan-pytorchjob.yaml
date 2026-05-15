@@ -1,8 +1,13 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
+
 metadata:
   name: torchtitan-llama-c4
+
 spec:
+  runPolicy:
+    cleanPodPolicy: Running
+
   elasticPolicy:
     rdzvBackend: c10d
     minReplicas: 4
@@ -14,7 +19,10 @@ spec:
     Master:
       replicas: 1
 
+      restartPolicy: Never
+
       template:
+
         metadata:
           annotations:
             k8s.v1.cni.cncf.io/networks: >-
@@ -39,87 +47,85 @@ spec:
 
           restartPolicy: Never
 
+          # IMPORTANT
+          # Adjust if your cluster uses different taints
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+
+          imagePullSecrets:
+            - name: ghcr-secret
+
           containers:
+
             - name: pytorch
-              image: yourrepo/torchtitan:latest
+
+              image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
+
+              imagePullPolicy: Always
 
               command:
                 - /bin/bash
                 - -c
                 - |
-                  export MASTER_ADDR=$(hostname)
+                  set -ex
+
+                  export MASTER_ADDR=torchtitan-llama-c4-master-0
+                  export MASTER_PORT=29500
+
                   export WORLD_SIZE=4
                   export RANK=0
 
-                  bash /workspace/run_torchtitan.sh
+                  export NCCL_DEBUG=INFO
+                  export NCCL_IB_DISABLE=0
+                  export NCCL_SOCKET_IFNAME=eth0
+
+                  export NCCL_IB_HCA=fabric0,fabric1,fabric2,fabric3,\
+                  fabric4,fabric5,fabric6,fabric7,\
+                  fabric8,fabric9,fabric10,fabric11,\
+                  fabric12,fabric13,fabric14,fabric15
+
+                  export NCCL_CROSS_NIC=1
+                  export NCCL_IB_QPS_PER_CONNECTION=4
+                  export NCCL_NET_GDR_LEVEL=2
+
+                  export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+
+                  cd /workspace/torchtitan
+
+                  torchrun \
+                    --nnodes=4 \
+                    --nproc_per_node=8 \
+                    --node_rank=0 \
+                    --master_addr=$MASTER_ADDR \
+                    --master_port=$MASTER_PORT \
+                    train.py \
+                    --job.config_file ./configs/llama3_8b_32gpu.toml
 
               resources:
+
                 limits:
                   nvidia.com/gpu: 8
 
-              volumeMounts:
-                - name: dshm
-                  mountPath: /dev/shm
+                  rdma/fabric0: 1
+                  rdma/fabric1: 1
+                  rdma/fabric2: 1
+                  rdma/fabric3: 1
+                  rdma/fabric4: 1
+                  rdma/fabric5: 1
+                  rdma/fabric6: 1
+                  rdma/fabric7: 1
+                  rdma/fabric8: 1
+                  rdma/fabric9: 1
+                  rdma/fabric10: 1
+                  rdma/fabric11: 1
+                  rdma/fabric12: 1
+                  rdma/fabric13: 1
+                  rdma/fabric14: 1
+                  rdma/fabric15: 1
 
-          volumes:
-            - name: dshm
-              emptyDir:
-                medium: Memory
-                sizeLimit: 32Gi
-
-    Worker:
-      replicas: 3
-
-      template:
-        metadata:
-          annotations:
-            k8s.v1.cni.cncf.io/networks: >-
-              roce-net-fabric0@fabric0,
-              roce-net-fabric1@fabric1,
-              roce-net-fabric2@fabric2,
-              roce-net-fabric3@fabric3,
-              roce-net-fabric4@fabric4,
-              roce-net-fabric5@fabric5,
-              roce-net-fabric6@fabric6,
-              roce-net-fabric7@fabric7,
-              roce-net-fabric8@fabric8,
-              roce-net-fabric9@fabric9,
-              roce-net-fabric10@fabric10,
-              roce-net-fabric11@fabric11,
-              roce-net-fabric12@fabric12,
-              roce-net-fabric13@fabric13,
-              roce-net-fabric14@fabric14,
-              roce-net-fabric15@fabric15
-
-        spec:
-
-          restartPolicy: Never
-
-          containers:
-            - name: pytorch
-              image: yourrepo/torchtitan:latest
-
-              command:
-                - /bin/bash
-                - -c
-                - |
-                  export MASTER_ADDR=torchtitan-llama-c4-master-0
-                  export WORLD_SIZE=4
-
-                  HOSTNAME=$(hostname)
-
-                  if [[ $HOSTNAME =~ worker-0 ]]; then
-                    export RANK=1
-                  elif [[ $HOSTNAME =~ worker-1 ]]; then
-                    export RANK=2
-                  else
-                    export RANK=3
-                  fi
-
-                  bash /workspace/run_torchtitan.sh
-
-              resources:
-                limits:
+                requests:
                   nvidia.com/gpu: 8
 
                   rdma/fabric0: 1
@@ -142,6 +148,163 @@ spec:
               volumeMounts:
                 - name: dshm
                   mountPath: /dev/shm
+
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 32Gi
+
+    Worker:
+      replicas: 3
+
+      restartPolicy: Never
+
+      template:
+
+        metadata:
+          annotations:
+            k8s.v1.cni.cncf.io/networks: >-
+              roce-net-fabric0@fabric0,
+              roce-net-fabric1@fabric1,
+              roce-net-fabric2@fabric2,
+              roce-net-fabric3@fabric3,
+              roce-net-fabric4@fabric4,
+              roce-net-fabric5@fabric5,
+              roce-net-fabric6@fabric6,
+              roce-net-fabric7@fabric7,
+              roce-net-fabric8@fabric8,
+              roce-net-fabric9@fabric9,
+              roce-net-fabric10@fabric10,
+              roce-net-fabric11@fabric11,
+              roce-net-fabric12@fabric12,
+              roce-net-fabric13@fabric13,
+              roce-net-fabric14@fabric14,
+              roce-net-fabric15@fabric15
+
+        spec:
+
+          restartPolicy: Never
+
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+
+          imagePullSecrets:
+            - name: ghcr-secret
+
+          containers:
+
+            - name: pytorch
+
+              image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
+
+              imagePullPolicy: Always
+
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -ex
+
+                  export MASTER_ADDR=torchtitan-llama-c4-master-0
+                  export MASTER_PORT=29500
+
+                  export WORLD_SIZE=4
+
+                  HOSTNAME=$(hostname)
+
+                  if [[ $HOSTNAME =~ worker-0 ]]; then
+                    export RANK=1
+                    export NODE_RANK=1
+                  elif [[ $HOSTNAME =~ worker-1 ]]; then
+                    export RANK=2
+                    export NODE_RANK=2
+                  else
+                    export RANK=3
+                    export NODE_RANK=3
+                  fi
+
+                  export NCCL_DEBUG=INFO
+                  export NCCL_IB_DISABLE=0
+                  export NCCL_SOCKET_IFNAME=eth0
+
+                  export NCCL_IB_HCA=fabric0,fabric1,fabric2,fabric3,\
+                  fabric4,fabric5,fabric6,fabric7,\
+                  fabric8,fabric9,fabric10,fabric11,\
+                  fabric12,fabric13,fabric14,fabric15
+
+                  export NCCL_CROSS_NIC=1
+                  export NCCL_IB_QPS_PER_CONNECTION=4
+                  export NCCL_NET_GDR_LEVEL=2
+
+                  export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+
+                  cd /workspace/torchtitan
+
+                  torchrun \
+                    --nnodes=4 \
+                    --nproc_per_node=8 \
+                    --node_rank=$NODE_RANK \
+                    --master_addr=$MASTER_ADDR \
+                    --master_port=$MASTER_PORT \
+                    train.py \
+                    --job.config_file ./configs/llama3_8b_32gpu.toml
+
+              resources:
+
+                limits:
+                  nvidia.com/gpu: 8
+
+                  rdma/fabric0: 1
+                  rdma/fabric1: 1
+                  rdma/fabric2: 1
+                  rdma/fabric3: 1
+                  rdma/fabric4: 1
+                  rdma/fabric5: 1
+                  rdma/fabric6: 1
+                  rdma/fabric7: 1
+                  rdma/fabric8: 1
+                  rdma/fabric9: 1
+                  rdma/fabric10: 1
+                  rdma/fabric11: 1
+                  rdma/fabric12: 1
+                  rdma/fabric13: 1
+                  rdma/fabric14: 1
+                  rdma/fabric15: 1
+
+                requests:
+                  nvidia.com/gpu: 8
+
+                  rdma/fabric0: 1
+                  rdma/fabric1: 1
+                  rdma/fabric2: 1
+                  rdma/fabric3: 1
+                  rdma/fabric4: 1
+                  rdma/fabric5: 1
+                  rdma/fabric6: 1
+                  rdma/fabric7: 1
+                  rdma/fabric8: 1
+                  rdma/fabric9: 1
+                  rdma/fabric10: 1
+                  rdma/fabric11: 1
+                  rdma/fabric12: 1
+                  rdma/fabric13: 1
+                  rdma/fabric14: 1
+                  rdma/fabric15: 1
+
+              volumeMounts:
+                - name: dshm
+                  mountPath: /dev/shm
+
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
 
           volumes:
             - name: dshm

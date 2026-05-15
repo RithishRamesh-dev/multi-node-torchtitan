@@ -25,11 +25,13 @@ GPUS_PER_NODE=8
 
 cd /workspace/torchtitan
 
+cd /workspace/torchtitan
+
 torchrun \
-  --nnodes=${NNODES} \
-  --nproc_per_node=${GPUS_PER_NODE} \
-  --node_rank=${NODE_RANK} \
-  --master_addr=${MASTER_ADDR} \
-  --master_port=${MASTER_PORT} \
-  train.py \
-  --job.config_file ./configs/llama3_8b.toml
+  --nnodes=4 \
+  --nproc_per_node=8 \
+  --node_rank=0 \
+  --master_addr=$MASTER_ADDR \
+  --master_port=$MASTER_PORT \
+  -m torchtitan.train \
+  --job.config_file ./configs/llama3_8b_32gpu.toml
