@@ -30,32 +30,21 @@ RUN pip install --pre torch \
     --force-reinstall
 
 # -------------------------
-# B300 (sm_103) SDPA fix — force MATH backend only
+# B300 (sm_103) SDPA fix
 #
-# Root cause (confirmed by full codebase analysis):
+# Error history and root causes:
+#  1. cuDNN SDPA (CUDNN_ATTENTION): no sm_103 kernels → hard crash. REMOVED.
+#  2. MATH backend: O(seq²) memory → 8GB per attention call at seq=8192 → OOM. REMOVED.
+#  3. Flash Attention + any AC mode: "tensor data not allocated" at backward.
+#     This error occurs WITH the checkpoint_wrapper active (any AC mode).
+#     Root cause: the ptd_checkpoint_wrapper interacts badly with Flash
+#     Attention's backward on B300 in nightly torch.
 #
-# Problem 1 — cuDNN SDPA forward fails:
-#   attention.py sdpa_backends=[CUDNN, FLASH, MATH] with set_priority=True.
-#   cuDNN has no sm_103 kernels → hard crash, no fallthrough.
-#
-# Problem 2 — Flash Attention backward fails:
-#   On B300 with PyTorch nightly, Flash Attention dispatches through
-#   _scaled_dot_product_fused_attention_overrideable (listed in
-#   activation_checkpoint.py line 40 as a save_op). This op returns tensors
-#   with deferred/lazy storage allocation on new architectures. When autograd
-#   traverses the backward graph, it encounters these unallocated tensors and
-#   throws: "tensor has non-zero elements but data not allocated yet".
-#   This happens at loss.backward() on step 1 — not during AC recompute.
-#   It fails with BOTH selective and full AC modes.
-#
-# Fix: Force SDPBackend.MATH only.
-#   MATH is pure PyTorch eager autograd — no custom CUDA kernels, no lazy
-#   storage, no dispatch to _fused_attention_overrideable. backward works
-#   correctly on any GPU architecture. Performance is lower (~3-4x vs Flash)
-#   but this is the only end-to-end working path on B300 with nightly torch.
-#
-# Memory note: With AC disabled (mode=none in YAML), activation memory for
-#   8B model at seq=8192 is ~12GB per GPU — fine on B300's 267GB.
+# Fix: Flash Attention ONLY (no cuDNN, no MATH), combined with AC mode=none
+#      in the YAML (set via --activation_checkpoint.mode none).
+#      Without the checkpoint_wrapper, Flash Attention forward+backward
+#      runs as pure eager autograd — no wrapper interference.
+#      Flash Attention is O(n) memory so no OOM risk at seq=8192.
 # -------------------------
 RUN python - << 'PYEOF'
 import ast
@@ -71,18 +60,17 @@ old = """            self.sdpa_backends = [
             ]"""
 
 new = """            self.sdpa_backends = [
-                SDPBackend.MATH,  # B300 workaround: MATH is only backend with working backward on sm_103/nightly
+                SDPBackend.FLASH_ATTENTION,  # B300: cuDNN has no sm_103 kernels; MATH is O(seq^2) OOM
             ]"""
 
-assert old in content, "Pattern not found — attention.py structure may have changed"
+assert old in content, "Pattern not found"
 content = content.replace(old, new)
 
 with open(path, "w") as f:
     f.write(content)
 
 ast.parse(content)
-print("Patch OK")
-print("Active backends:", [l.strip() for l in content.splitlines() if "SDPBackend." in l and "import" not in l and "sdpa_backends" not in l])
+print("Patch OK — FLASH_ATTENTION only")
 PYEOF
 
 RUN python -c "import ast; ast.parse(open('/workspace/torchtitan/torchtitan/models/common/attention.py').read()); print('syntax OK')"
