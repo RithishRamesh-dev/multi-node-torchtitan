@@ -105,7 +105,8 @@ spec:
                     --master_port=${MASTER_PORT} \
                     -m torchtitan.train \
                     --module llama3 \
-                    --config llama3_8b
+                    --config llama3_8b \
+                    --activation_checkpoint.mode none
 
               resources:
                 limits:
@@ -248,7 +249,8 @@ spec:
                     --master_port=${MASTER_PORT} \
                     -m torchtitan.train \
                     --module llama3 \
-                    --config llama3_8b
+                    --config llama3_8b \
+                    --activation_checkpoint.mode none
 
               resources:
                 limits:
