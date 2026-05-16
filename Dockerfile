@@ -33,7 +33,8 @@ RUN pip install \
     numpy packaging typing_extensions pyyaml \
     protobuf sentencepiece accelerate \
     huggingface_hub safetensors fsspec datasets \
-    docstring_parser tyro
+    docstring_parser tyro \
+    absl-py tensorboard
 
 # Verify
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
