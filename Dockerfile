@@ -25,27 +25,27 @@ RUN pip install \
     docstring_parser tyro \
     absl-py tensorboard
 
-RUN pip install --pre torch \
-    --index-url https://download.pytorch.org/whl/nightly/cu128 \
-    --force-reinstall
+# -----------------------------------------------------------------------
+# DO NOT install PyTorch nightly. Use stable 2.7.0 from the base image.
+#
+# Root cause of all previous failures:
+# We were overriding the base image's stable torch==2.7.0+cu128 with
+# a nightly build. PyTorch nightly has a regression in the backward
+# pass of Flash Attention on B300 (sm_103) via
+# _scaled_dot_product_fused_attention_overrideable, producing:
+#   "tensor has non-zero elements but data not allocated yet"
+#
+# PyTorch 2.7.0 STABLE explicitly added Blackwell SDPA support (PR #145602:
+# "Add Blackwell support to SDPA" — sm_100 and sm_120 archs). The stable
+# release Flash Attention backward works correctly on B300.
+#
+# HuggingFaceStorageWriter is NOT needed: it's only used when
+# checkpoint.last_save_in_hf=True, which is False (the default) in the
+# llama3_8b config. Nightly was never required.
+# -----------------------------------------------------------------------
 
-# -------------------------
-# B300 (sm_103) SDPA fix
-#
-# Error history and root causes:
-#  1. cuDNN SDPA (CUDNN_ATTENTION): no sm_103 kernels → hard crash. REMOVED.
-#  2. MATH backend: O(seq²) memory → 8GB per attention call at seq=8192 → OOM. REMOVED.
-#  3. Flash Attention + any AC mode: "tensor data not allocated" at backward.
-#     This error occurs WITH the checkpoint_wrapper active (any AC mode).
-#     Root cause: the ptd_checkpoint_wrapper interacts badly with Flash
-#     Attention's backward on B300 in nightly torch.
-#
-# Fix: Flash Attention ONLY (no cuDNN, no MATH), combined with AC mode=none
-#      in the YAML (set via --activation_checkpoint.mode none).
-#      Without the checkpoint_wrapper, Flash Attention forward+backward
-#      runs as pure eager autograd — no wrapper interference.
-#      Flash Attention is O(n) memory so no OOM risk at seq=8192.
-# -------------------------
+# Patch attention.py: remove cuDNN (no sm_103 kernels in cuDNN)
+# Keep FLASH_ATTENTION + MATH fallback — both work in stable 2.7.0
 RUN python - << 'PYEOF'
 import ast
 
@@ -60,22 +60,21 @@ old = """            self.sdpa_backends = [
             ]"""
 
 new = """            self.sdpa_backends = [
-                SDPBackend.FLASH_ATTENTION,  # B300: cuDNN has no sm_103 kernels; MATH is O(seq^2) OOM
+                SDPBackend.FLASH_ATTENTION,  # stable 2.7.0 has working FA backward on B300
+                SDPBackend.MATH,             # fallback (not needed at seq=8192 but safe to list)
             ]"""
 
 assert old in content, "Pattern not found"
 content = content.replace(old, new)
-
 with open(path, "w") as f:
     f.write(content)
-
 ast.parse(content)
-print("Patch OK — FLASH_ATTENTION only")
+print("Patch OK")
 PYEOF
 
 RUN python -c "import ast; ast.parse(open('/workspace/torchtitan/torchtitan/models/common/attention.py').read()); print('syntax OK')"
 RUN grep -n "SDPBackend\|sdpa_backends" /workspace/torchtitan/torchtitan/models/common/attention.py
-RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('imports OK')"
-RUN python -c "import torch; print('PyTorch:', torch.__version__)"
+RUN python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.version.cuda)"
+RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
 
 WORKDIR /workspace
