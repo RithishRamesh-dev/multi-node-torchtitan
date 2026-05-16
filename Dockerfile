@@ -34,31 +34,25 @@ RUN pip install --pre torch \
     --force-reinstall
 
 # -------------------------
-# B300 (sm_103) SDPA workaround
+# B300 (sm_103) cuDNN SDPA workaround
 #
-# The NVIDIA B300 GPU has compute capability sm_103. As of May 2026, NO official
-# PyTorch release or NVIDIA container includes sm_103 in TORCH_CUDA_ARCH_LIST —
-# not PyTorch 2.7, not PyTorch nightly, not NGC 25.10. This is an ecosystem-wide
-# gap confirmed by NVIDIA engineers.
+# The NVIDIA B300 GPU (sm_103) has no compiled cuDNN SDPA kernels in any
+# official PyTorch or NVIDIA container as of May 2026 — confirmed by NVIDIA
+# engineers. cuDNN Frontend fails with "No valid execution plans built."
 #
-# Impact: cuDNN Frontend cannot build valid execution plans for SDPA on B300
-# because it has no sm_103-compiled kernels. This causes:
-#   RuntimeError: cuDNN Frontend error: No valid execution plans built
-#
-# Fix: Disable cuDNN SDPA and use Flash Attention instead. On B300, Flash
-# Attention runs sm_100 (B200-compatible) kernels which work correctly.
-# This is NOT a performance regression vs cuDNN since cuDNN SDPA fails entirely.
-# It will be resolved when NVIDIA ships sm_103 support in official containers.
-#
-# Reference: https://pytorch.org/docs/stable/backends.html#torch.backends.cuda.enable_cudnn_sdp
+# Fix: Patch TorchTitan's train.py to disable cuDNN SDPA at startup and fall
+# back to Flash Attention (which runs sm_100/B200 kernels correctly on B300).
+# This patch is in the source code, so pip reinstalls cannot overwrite it.
 # -------------------------
-RUN echo "import torch; torch.backends.cuda.enable_cudnn_sdp(False)" \
-    > /opt/conda/lib/python3.11/site-packages/sitecustomize.py
+RUN sed -i 's/^import torch$/import torch\ntorch.backends.cuda.enable_cudnn_sdp(False)  # B300 sm_103 workaround: no cuDNN SDPA kernels for sm_103 yet/' \
+    /workspace/torchtitan/torchtitan/train.py && \
+    head -5 /workspace/torchtitan/torchtitan/train.py
 
-# Verify
+# Verify the patch is in place
+RUN grep -n "enable_cudnn_sdp" /workspace/torchtitan/torchtitan/train.py
+
+# Verify imports
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
 RUN python -c "import torch; print('PyTorch:', torch.__version__)"
-RUN python -c "import torch; print('cuDNN SDPA enabled:', torch.backends.cuda.cudnn_sdp_enabled())"
-RUN python -c "import torch; print('Flash SDPA available:', torch.backends.cuda.is_flash_attention_available())"
 
 WORKDIR /workspace
