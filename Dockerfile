@@ -1,7 +1,7 @@
 FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel
 
 RUN apt-get update && apt-get install -y \
-    git wget curl build-essential \
+    git wget curl build-essential ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip setuptools wheel
@@ -25,7 +25,22 @@ RUN pip install \
     docstring_parser tyro \
     absl-py tensorboard
 
-# Patch 1: attention.py — remove cuDNN (no sm_103 kernels), keep FLASH + MATH
+# Install PyTorch nightly — required for TorchTitan's DCP APIs
+# (DefaultStager, StagingOptions, HuggingFaceStorageWriter, AsyncCheckpointerType
+#  are all post-2.7.0 stable additions, present only in nightly)
+RUN pip install --pre torch \
+    --index-url https://download.pytorch.org/whl/nightly/cu128 \
+    --force-reinstall
+
+# Install flash-attn package targeting sm_100 (B200), which also runs on B300 (sm_103)
+# via CUDA forward compatibility. This gives flash-attn its own proper CUDA kernels
+# with a correct backward pass, bypassing PyTorch nightly's broken
+# _scaled_dot_product_fused_attention_overrideable dispatch on B300.
+RUN pip install packaging ninja
+RUN TORCH_CUDA_ARCH_LIST="10.0" pip install flash-attn --no-build-isolation
+
+# Patch attention.py: remove cuDNN (no sm_103 kernels) and remove MATH (OOM at seq=8192)
+# Keep only FLASH_ATTENTION — now backed by flash-attn's proper sm_100 kernels
 RUN python - << 'PYEOF'
 import ast
 path = "/workspace/torchtitan/torchtitan/models/common/attention.py"
@@ -38,81 +53,25 @@ old = """            self.sdpa_backends = [
             ]"""
 new = """            self.sdpa_backends = [
                 SDPBackend.FLASH_ATTENTION,
-                SDPBackend.MATH,
             ]"""
 assert old in content, "Pattern not found in attention.py"
 content = content.replace(old, new)
 with open(path, "w") as f:
     f.write(content)
 ast.parse(content)
-assert "SDPBackend.CUDNN_ATTENTION" not in content, "cuDNN still present"
-assert "SDPBackend.FLASH_ATTENTION" in content, "FLASH missing"
+assert "SDPBackend.CUDNN_ATTENTION" not in content
+assert "SDPBackend.FLASH_ATTENTION" in content
 print("attention.py patch OK")
 PYEOF
 
-# Patch 2: checkpoint.py — wrap HuggingFace imports in try/except (not in stable 2.7.0)
+# Validate
 RUN python - << 'PYEOF'
 import ast
-path = "/workspace/torchtitan/torchtitan/components/checkpoint.py"
-with open(path) as f:
-    content = f.read()
-old = """from torch.distributed.checkpoint import HuggingFaceStorageWriter
-from torch.distributed.checkpoint._consolidate_hf_safetensors import (
-    consolidate_safetensors_files_on_every_rank,
-)"""
-new = """try:
-    from torch.distributed.checkpoint import HuggingFaceStorageWriter
-    from torch.distributed.checkpoint._consolidate_hf_safetensors import (
-        consolidate_safetensors_files_on_every_rank,
-    )
-except ImportError:
-    HuggingFaceStorageWriter = None  # type: ignore[assignment,misc]
-    consolidate_safetensors_files_on_every_rank = None  # type: ignore[assignment]"""
-assert old in content, "Pattern not found in checkpoint.py"
-content = content.replace(old, new)
-with open(path, "w") as f:
-    f.write(content)
-ast.parse(content)
-assert "except ImportError:" in content, "except block missing"
-assert "HuggingFaceStorageWriter = None" in content, "fallback missing"
-print("checkpoint.py patch OK")
-PYEOF
-
-# Patch 3: state_dict_adapter.py — wrap HuggingFaceStorageReader in try/except
-RUN python - << 'PYEOF'
-import ast
-path = "/workspace/torchtitan/torchtitan/protocols/state_dict_adapter.py"
-with open(path) as f:
-    content = f.read()
-old = "from torch.distributed.checkpoint import HuggingFaceStorageReader"
-new = """try:
-    from torch.distributed.checkpoint import HuggingFaceStorageReader
-except ImportError:
-    HuggingFaceStorageReader = None  # type: ignore[assignment,misc]"""
-assert old in content, "Pattern not found in state_dict_adapter.py"
-content = content.replace(old, new)
-with open(path, "w") as f:
-    f.write(content)
-ast.parse(content)
-assert "except ImportError:" in content, "except block missing"
-assert "HuggingFaceStorageReader = None" in content, "fallback missing"
-print("state_dict_adapter.py patch OK")
-PYEOF
-
-# Final validation: syntax-check all patched files
-RUN python - << 'PYEOF'
-import ast
-files = [
-    "/workspace/torchtitan/torchtitan/models/common/attention.py",
-    "/workspace/torchtitan/torchtitan/components/checkpoint.py",
-    "/workspace/torchtitan/torchtitan/protocols/state_dict_adapter.py",
-]
-for p in files:
-    ast.parse(open(p).read())
-    print("syntax OK:", p)
-print("All patches validated")
+ast.parse(open("/workspace/torchtitan/torchtitan/models/common/attention.py").read())
+print("syntax OK: attention.py")
 PYEOF
 
 RUN python -c "import torch; print('PyTorch:', torch.__version__, '| CUDA:', torch.version.cuda)"
+RUN python -c "import flash_attn; print('flash-attn:', flash_attn.__version__)"
 
 WORKDIR /workspace
