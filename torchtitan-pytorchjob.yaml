@@ -37,16 +37,13 @@ spec:
         spec:
           restartPolicy: Never
 
-          imagePullSecrets:
-            - name: ghcr-secret
-
           tolerations:
             - key: "nvidia.com/gpu"
               operator: "Exists"
               effect: "NoSchedule"
 
           initContainers:
-            # FIX: Download tokenizer before training starts.
+            # Download tokenizer before training starts.
             # TorchTitan requires tokenizer.model at the path specified in the toml.
             - name: init-pytorch
               image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
@@ -57,20 +54,10 @@ spec:
                 - |
                   set -eux
                   cd /workspace/torchtitan
-                  # Download tokenizer if not present
-                  if [ ! -f tokenizer.model ]; then
-                    python scripts/download_tokenizer.py \
-                      --repo_id meta-llama/Meta-Llama-3-8B \
-                      --tokenizer_path . \
-                      --hf_token "${HF_TOKEN:-}"
-                  fi
-              env:
-                - name: HF_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: hf-secret
-                      key: token
-                      optional: true
+                  # Download tokenizer from ungated public mirror (no HF token needed)
+                  python scripts/download_hf_assets.py \
+                    --repo_id NousResearch/Meta-Llama-3-8B \
+                    --assets tokenizer
               volumeMounts:
                 - name: dshm
                   mountPath: /dev/shm
@@ -204,9 +191,6 @@ spec:
 
         spec:
           restartPolicy: Never
-
-          imagePullSecrets:
-            - name: ghcr-secret
 
           tolerations:
             - key: "nvidia.com/gpu"

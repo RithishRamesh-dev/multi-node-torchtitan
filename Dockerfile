@@ -32,7 +32,8 @@ RUN pip install -e . --no-deps
 RUN pip install \
     numpy packaging typing_extensions pyyaml \
     protobuf sentencepiece accelerate \
-    huggingface_hub safetensors fsspec datasets
+    huggingface_hub safetensors fsspec datasets \
+    docstring_parser tyro
 
 # Verify
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
