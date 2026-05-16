@@ -53,6 +53,16 @@ RUN pip install --pre torch \
     --force-reinstall
 
 # -------------------------
+# FIX: cuDNN SDPA "No valid execution plans" error
+# Root cause: libnvrtc-builtins.so.* is not found by cuDNN frontend in pip nightly wheels.
+# cuDNN needs libnvrtc-builtins to JIT-compile attention kernels at runtime.
+# Setting LD_LIBRARY_PATH to include nvidia cuda lib dirs fixes it without
+# disabling or degrading cuDNN — full B300 cuDNN attention performance preserved.
+# See: https://github.com/pytorch/pytorch/issues/167602
+# -------------------------
+ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cuda_runtime/lib
+
+# -------------------------
 # Verify critical imports
 # -------------------------
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"

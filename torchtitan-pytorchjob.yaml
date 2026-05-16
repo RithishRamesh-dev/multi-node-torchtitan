@@ -69,6 +69,12 @@ spec:
                   value: "1"
                 - name: CUDA_DEVICE_MAX_CONNECTIONS
                   value: "1"
+                - name: TORCH_CUDNN_SDPA_ENABLED
+                  value: "0"
+                - name: TORCH_CUDNN_V8_API_ENABLED
+                  value: "0"
+                - name: PYTORCH_ATTENTION_BACKEND
+                  value: "math"
 
               command:
                 - /bin/bash
@@ -207,6 +213,12 @@ spec:
                   value: "1"
                 - name: CUDA_DEVICE_MAX_CONNECTIONS
                   value: "1"
+                - name: TORCH_CUDNN_SDPA_ENABLED
+                  value: "0"
+                - name: TORCH_CUDNN_V8_API_ENABLED
+                  value: "0"
+                - name: PYTORCH_ATTENTION_BACKEND
+                  value: "math"
 
               command:
                 - /bin/bash
