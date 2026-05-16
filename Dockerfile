@@ -32,35 +32,19 @@ RUN pip install --pre torch \
 # -------------------------
 # B300 (sm_103) cuDNN SDPA fix
 #
-# Root cause (confirmed by reading TorchTitan source):
-#   attention.py ScaledDotProductAttention.__init__ sets:
-#     self.sdpa_backends = [CUDNN_ATTENTION, FLASH_ATTENTION, MATH]
-#   with set_priority=True — PyTorch tries cuDNN FIRST.
-#   cuDNN SDPA has no sm_103 kernels for B300, so it fails hard.
-#   PyTorch does NOT fall through to Flash Attention on failure.
+# Root cause: TorchTitan's ScaledDotProductAttention sets:
+#   sdpa_backends = [CUDNN_ATTENTION, FLASH_ATTENTION, MATH]
+# with set_priority=True — cuDNN is tried first and fails hard on B300.
+# PyTorch does NOT fall through to Flash Attention on failure.
 #
-# Fix: Remove CUDNN_ATTENTION from the default list in attention.py.
-#   This is a one-line sed on a known exact string.
-#   After the patch: [FLASH_ATTENTION, MATH] — Flash runs on B300 via sm_100.
-#
-# Verified by reading:
-#   torchtitan/models/common/attention.py lines 274-279
+# Fix: Remove CUDNN_ATTENTION from the default list.
+# After patch: [FLASH_ATTENTION, MATH] — Flash runs on B300 via sm_100.
 # -------------------------
-RUN sed -i '/SDPBackend.CUDNN_ATTENTION,/d' \
-    /workspace/torchtitan/torchtitan/models/common/attention.py
+RUN sed -i '/SDPBackend.CUDNN_ATTENTION,/d' /workspace/torchtitan/torchtitan/models/common/attention.py
 
-# Confirm CUDNN_ATTENTION is gone and FLASH_ATTENTION remains
-RUN grep -n "SDPBackend\|sdpa_backends" \
-    /workspace/torchtitan/torchtitan/models/common/attention.py
+RUN grep -n "SDPBackend\|sdpa_backends" /workspace/torchtitan/torchtitan/models/common/attention.py
 
-# Validate Python syntax
-RUN python -c "
-import ast
-with open('/workspace/torchtitan/torchtitan/models/common/attention.py') as f:
-    src = f.read()
-ast.parse(src)
-print('attention.py syntax OK')
-"
+RUN python -c "import ast; ast.parse(open('/workspace/torchtitan/torchtitan/models/common/attention.py').read()); print('attention.py syntax OK')"
 
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
 RUN python -c "import torch; print('PyTorch:', torch.__version__)"
