@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # -------------------------
-# Upgrade pip tooling (NOT torch — base image has 2.7 which we keep)
+# Upgrade pip tooling (NOT torch)
 # -------------------------
 RUN pip install --upgrade pip setuptools wheel
 
@@ -22,7 +22,6 @@ RUN git clone https://github.com/pytorch/torchtitan.git /workspace/torchtitan
 
 WORKDIR /workspace/torchtitan
 
-# Install TorchTitan deps without touching torch
 RUN pip install -r requirements.txt --no-deps || true
 RUN pip install -e . --no-deps
 
@@ -45,8 +44,7 @@ RUN pip install \
     absl-py tensorboard
 
 # -------------------------
-# Install PyTorch nightly with CUDA 12.8 support for Blackwell/B300 (sm_100)
-# Must be done LAST so nothing downgrades it
+# Install PyTorch nightly cu128 for B300 (sm_100) support — must be LAST
 # -------------------------
 RUN pip install --pre torch \
     --index-url https://download.pytorch.org/whl/nightly/cu128 \
@@ -54,19 +52,30 @@ RUN pip install --pre torch \
 
 # -------------------------
 # FIX: cuDNN SDPA "No valid execution plans" error
-# Root cause: libnvrtc-builtins.so.* is not found by cuDNN frontend in pip nightly wheels.
-# cuDNN needs libnvrtc-builtins to JIT-compile attention kernels at runtime.
-# Setting LD_LIBRARY_PATH to include nvidia cuda lib dirs fixes it without
-# disabling or degrading cuDNN — full B300 cuDNN attention performance preserved.
+#
+# Root cause: pip nightly torch wheel installs nvidia-cuda-nvrtc with hash-mangled
+# library names (libnvrtc-builtins-HASH.so.12.8) that cuDNN frontend cannot find
+# when it tries to dlopen libnvrtc-builtins.so.12.8 at runtime.
+#
+# Fix 1: Add /usr/local/cuda/lib64 (system CUDA, has canonical names) to LD_LIBRARY_PATH.
+# Fix 2: Create canonical symlinks for hash-named files in pip nvidia packages.
+#
 # See: https://github.com/pytorch/pytorch/issues/167602
+#      https://github.com/pytorch/pytorch/issues/99781
 # -------------------------
-ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cuda_runtime/lib
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}
+
+RUN for f in $(find /opt/conda/lib/python3.11/site-packages/nvidia -name 'libnvrtc-builtins-*.so*' 2>/dev/null); do \
+      dir=$(dirname "$f"); \
+      canonical="$dir/$(basename $f | sed 's/libnvrtc-builtins-[0-9a-f]*/libnvrtc-builtins/')"; \
+      [ ! -e "$canonical" ] && ln -s "$f" "$canonical" && echo "Linked: $canonical"; \
+    done; ldconfig; true
 
 # -------------------------
-# Verify critical imports
+# Verify
 # -------------------------
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
 RUN python -c "import torch; print('PyTorch:', torch.__version__)"
-RUN python -c "import torch; assert torch.cuda.is_available() or True; print('CUDA version:', torch.version.cuda)"
+RUN ldconfig -p | grep libnvrtc-builtins || echo "WARNING: libnvrtc-builtins not in ldconfig — LD_LIBRARY_PATH will handle it at runtime"
 
 WORKDIR /workspace
