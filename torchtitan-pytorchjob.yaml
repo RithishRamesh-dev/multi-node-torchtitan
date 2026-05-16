@@ -42,26 +42,6 @@ spec:
               operator: "Exists"
               effect: "NoSchedule"
 
-          initContainers:
-            # Download tokenizer before training starts.
-            # TorchTitan requires tokenizer.model at the path specified in the toml.
-            - name: init-pytorch
-              image: ghcr.io/rithishramesh-dev/torchtitan-llama:latest
-              imagePullPolicy: Always
-              command:
-                - /bin/bash
-                - -c
-                - |
-                  set -eux
-                  cd /workspace/torchtitan
-                  # Download tokenizer from ungated public mirror (no HF token needed)
-                  python scripts/download_hf_assets.py \
-                    --repo_id NousResearch/Meta-Llama-3-8B \
-                    --assets tokenizer
-              volumeMounts:
-                - name: dshm
-                  mountPath: /dev/shm
-
           containers:
             - name: pytorch
               # FIX: Pin image digest or use a versioned tag instead of :latest
@@ -104,8 +84,13 @@ spec:
 
                   cd /workspace/torchtitan
 
-                  # FIX: Use -m torchtitan.train (not train.py directly)
-                  # FIX: Config filename matches what is actually in the container
+                  # Download tokenizer from ungated public mirror and symlink to expected path
+                  python scripts/download_hf_assets.py \
+                    --repo_id NousResearch/Meta-Llama-3.1-8B \
+                    --assets tokenizer
+                  mkdir -p assets/hf
+                  ln -sfn $(pwd)/assets/hf/Meta-Llama-3.1-8B $(pwd)/assets/hf/Llama-3.1-8B
+
                   torchrun \
                     --nnodes=${NNODES} \
                     --nproc_per_node=8 \
@@ -113,7 +98,8 @@ spec:
                     --master_addr=${MASTER_ADDR} \
                     --master_port=${MASTER_PORT} \
                     -m torchtitan.train \
-                    --job.config_file ./configs/llama3_8b.toml
+                    --module llama3 \
+                    --config llama3_8b
 
               resources:
                 limits:
@@ -235,6 +221,13 @@ spec:
 
                   cd /workspace/torchtitan
 
+                  # Download tokenizer from ungated public mirror and symlink to expected path
+                  python scripts/download_hf_assets.py \
+                    --repo_id NousResearch/Meta-Llama-3.1-8B \
+                    --assets tokenizer
+                  mkdir -p assets/hf
+                  ln -sfn $(pwd)/assets/hf/Meta-Llama-3.1-8B $(pwd)/assets/hf/Llama-3.1-8B
+
                   torchrun \
                     --nnodes=${NNODES} \
                     --nproc_per_node=8 \
@@ -242,7 +235,8 @@ spec:
                     --master_addr=${MASTER_ADDR} \
                     --master_port=${MASTER_PORT} \
                     -m torchtitan.train \
-                    --job.config_file ./configs/llama3_8b.toml
+                    --module llama3 \
+                    --config llama3_8b
 
               resources:
                 limits:

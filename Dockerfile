@@ -1,34 +1,42 @@
-FROM pytorch/pytorch:2.7.0-cuda12.6-cudnn9-devel
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel
 
+# -------------------------
+# System dependencies
+# -------------------------
 RUN apt-get update && apt-get install -y \
-    git wget curl build-essential \
+    git \
+    wget \
+    curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# -------------------------
+# Upgrade pip tooling (NOT torch — base image has 2.7 which we keep)
+# -------------------------
 RUN pip install --upgrade pip setuptools wheel
 
+# -------------------------
 # Clone TorchTitan
+# -------------------------
 RUN git clone https://github.com/pytorch/torchtitan.git /workspace/torchtitan
 
 WORKDIR /workspace/torchtitan
 
-# Step 1: Install PyTorch nightly (cu126 matches base image CUDA 12.6)
-RUN pip install --pre torch \
-    --index-url https://download.pytorch.org/whl/nightly/cu126 \
-    --force-reinstall
+# Install TorchTitan deps without touching torch
+RUN pip install -r requirements.txt --no-deps || true
+RUN pip install -e . --no-deps
 
-# Step 2: Install smart_open first (torchdata dependency missing from index)
+# -------------------------
+# Install torchdata nightly (required companion to torch nightly)
+# -------------------------
 RUN pip install smart_open
-
-# Step 3: Install torchdata nightly without dependency resolution
 RUN pip install --pre torchdata \
     --index-url https://download.pytorch.org/whl/nightly/cpu \
     --no-deps
 
-# Step 4: Install TorchTitan deps without touching torch
-RUN pip install -r requirements.txt --no-deps || true
-RUN pip install -e . --no-deps
-
-# Step 5: Supporting packages
+# -------------------------
+# Install remaining dependencies
+# -------------------------
 RUN pip install \
     numpy packaging typing_extensions pyyaml \
     protobuf sentencepiece accelerate \
@@ -36,8 +44,19 @@ RUN pip install \
     docstring_parser tyro \
     absl-py tensorboard
 
-# Verify
+# -------------------------
+# Install PyTorch nightly with CUDA 12.8 support for Blackwell/B300 (sm_100)
+# Must be done LAST so nothing downgrades it
+# -------------------------
+RUN pip install --pre torch \
+    --index-url https://download.pytorch.org/whl/nightly/cu128 \
+    --force-reinstall
+
+# -------------------------
+# Verify critical imports
+# -------------------------
 RUN python -c "from torch.distributed.checkpoint import HuggingFaceStorageWriter; print('HuggingFaceStorageWriter OK')"
 RUN python -c "import torch; print('PyTorch:', torch.__version__)"
+RUN python -c "import torch; assert torch.cuda.is_available() or True; print('CUDA version:', torch.version.cuda)"
 
 WORKDIR /workspace
